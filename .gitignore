@@ -1,0 +1,10 @@
+# gitx runtime state (created by `gitx init` / sessions)
+.gitx/
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+build/
+dist/
+.venv/

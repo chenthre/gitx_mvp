@@ -1,0 +1,18 @@
+[build-system]
+requires = ["setuptools>=61"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "gitx"
+version = "0.3.0"
+description = "Controlled RW/RO/HIDDEN git worktree views for coding agents"
+readme = "README.md"
+requires-python = ">=3.8"
+license = {text = "MIT"}
+# no runtime dependencies — everything is stdlib + the git CLI
+
+[project.scripts]
+gitx = "gitx.cli:main"
+
+[tool.setuptools]
+packages = ["gitx"]

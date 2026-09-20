@@ -1,0 +1,4 @@
+#!/bin/sh
+# Zero-install wrapper: runs gitx straight from the repo.
+ROOT="$(cd "$(dirname "$(readlink -f "$0")")/.." && pwd)"
+PYTHONPATH="$ROOT${PYTHONPATH:+:$PYTHONPATH}" exec python3 -m gitx "$@"
