@@ -1,159 +1,203 @@
-# gitx — 给 Agent 的受控 Git 工作视图（MVP）
+# gitx — controlled RW/RO/HIDDEN Git worktree views for coding agents
 
-> **一句话**：在 git worktree 上用 **git 自己的机制**实现 `RW / RO / HIDDEN`
-> 三种文件锁；Agent 的合法修改实时处于 git 版本控制之下，diff /
-> checkpoint / rollback 全部是原生 git，**没有任何挂载、沙箱或第二份状态**。
+> **In one sentence**: use **git's own mechanisms** to give agents a
+> workspace with `RW / RO / HIDDEN` file locks. Everything the agent
+> legitimately changes is under git version control in real time —
+> diff / checkpoint / rollback are plain git, with **no mounts, no
+> sandbox, and no second copy of state**.
 
-## 架构（git-native，零挂载）
+[中文版 README](README_cn.md)
+
+## Why
+
+When you let a coding agent (pi, claude, codex, aider) loose on a
+repository, you usually want to constrain what it can see and touch:
+
+```text
+repo/
+├── src/                 agent may modify
+├── tests/               agent may modify
+├── generated/           needed at runtime, but must not be modified
+├── package-lock.json    needed at runtime, but must not be modified
+├── .env                 agent must not see
+└── secrets/             agent must not see
+```
+
+Simply deleting files breaks the runtime environment; merely asking the
+agent not to touch them isn't a real constraint. gitx gives you three
+understandable locks instead — **rw / ro / hidden** — expressed entirely
+with git's own primitives.
+
+## Architecture (git-native, zero mounts)
 
 ```
-你的仓库 (正常 checkout，不被打扰)
-└── .gitx/worktrees/<id>/        ← git worktree，就是 Agent 的 cwd
+your repo (normal checkout, untouched)
+└── .gitx/worktrees/<id>/        ← a git worktree; literally the agent's cwd
      │
-     ├── HIDDEN  git sparse-checkout   文件根本不落盘：ls/cat/stat 全部 ENOENT
-     ├── RO      chmod 444/555          写入得到 Permission denied；嵌套目录连删除/改名都挡
-     ├── guard   pre-commit hook        锁定文件的改动永远进不了 commit（含 agent 自己跑 git）
-     └── 其余    RW                     正常工作，实时出现在 git status / git diff
+     ├── HIDDEN  git sparse-checkout   files never materialize: ls/cat/stat → ENOENT
+     ├── RO      chmod 444/555          writes fail with Permission denied;
+     │                                   nested dirs block even delete/rename
+     ├── guard   pre-commit hook        changes to locked paths never enter a
+     │                                   commit (even via raw git by the agent)
+     └── the rest  RW                   normal writes, live in git status/diff
 ```
 
-| 锁 | 机制（全部是现有轮子） | Agent 看到的 |
+| Lock | Mechanism (all existing tools) | What the agent sees |
 |---|---|---|
-| `rw` | 无干预 | 正常读写，实时进 git |
-| `ro` | chmod（文件 444，目录 555） | `Permission denied`（同 EROFS 的 UX）；读/构建正常 |
-| `hidden` | `git sparse-checkout`（非 cone 模式，gitignore 式 pattern） | 文件不存在（`ls` 看不到、`cat` ENOENT） |
+| `rw` | none | normal reads/writes, live in git |
+| `ro` | `chmod` (files 444, dirs 555) | `Permission denied` (same UX as EROFS); reading/building works |
+| `hidden` | `git sparse-checkout` (non-cone, gitignore-style patterns) | file does not exist (`ls` can't see it, `cat` → ENOENT) |
 
-版本管理 100% git：`status` = git status、`checkpoint` = git add+commit、
-`rollback` = git reset+clean、`finish` 后用普通 `git merge` 收编分支。
+Version management is 100% git: `status` = git status, `checkpoint` =
+git add + commit, `rollback` = git reset + clean, and after `finish` you
+merge the branch with a plain `git merge`.
 
-## 快速开始
+## Quick start
 
-依赖（Linux）：`git` ≥ 2.25（sparse-checkout）、Python ≥ 3.8。**不需要
-fusepy / bwrap / root**。`pip3 install -e .`（editable 需 setuptools ≥ 64，
-否则用零安装 wrapper `bin/gitx`）。
+Requirements (Linux): `git` ≥ 2.25 (sparse-checkout), Python ≥ 3.8.
+**No fusepy / bwrap / root needed.** `pip3 install -e .` (editable
+install needs setuptools ≥ 64; otherwise use the zero-install wrapper
+`bin/gitx`).
 
 ```bash
 cd your-repo
-gitx init                          # 生成 .gitx.toml（默认 default = "rw"）
+gitx init                          # creates .gitx.toml (default = "rw")
 
 gitx lock package-lock.json        # RO
-gitx lock 'generated/**'           # RO 整棵子树
+gitx lock 'generated/**'           # RO — a whole subtree
 gitx hide .env                     # HIDDEN
 gitx hide 'secrets/**'
 
-gitx ls                            # 查看每个文件的锁状态
+gitx ls                            # show each file's lock state
 gitx session create                # git worktree add -b agent/<id>
-gitx run <id> -- pi                # ← 就这么简单（见下）
+gitx run <id> -- pi                # ← that's it (see below)
 ```
 
-## 运行真实 Agent CLI
+## Running a real agent CLI
 
 ```bash
-gitx run <id> -- pi                # 或 claude、codex、aider、任意命令/脚本
+gitx run <id> -- pi                # or claude, codex, aider, any command/script
 gitx run <id> -- pi -p "fix the failing test"
 ```
 
-Agent 的 cwd 是 session worktree，**其余一切（HOME、PATH、配置、认证）
-都是你自己的环境**——因为没有任何挂载/沙箱，所以也没有"把环境重建一遍"
-的坑。`gitx run` 做的事只有：确保锁就位（幂等，还会修复 agent 对锁定
-文件的 chmod 篡改）→ 以 worktree 为 cwd exec。
+The agent's cwd is the session worktree; **everything else (HOME, PATH,
+config, credentials) is your own environment** — since there are no
+mounts/sandboxes, there's nothing to "recreate". `gitx run` only: applies
+the locks (idempotent — it also repairs chmod tampering the agent did on
+locked files) → execs the agent with the worktree as cwd.
 
-Agent 也可以直接用 git（status/diff/log/commit）——它的 commit 同样
-过 pre-commit 守卫。
+The agent can also use git directly (status/diff/log/commit) — its
+commits pass through the same pre-commit guard.
 
-## Session 生命周期（全部是普通 git）
+## Session lifecycle (all plain git)
 
 ```bash
 gitx session create [--base <rev>] [--name <name>]
 gitx run <id> -- pi "fix the failing test"
 
-gitx status <id>               # git status + 锁违规警告
+gitx status <id>               # git status + lock-violation warnings
 gitx diff <id>                 # git diff HEAD
-gitx checkpoint <id> -m "msg"  # git add -A && git commit（违规则拒绝）
-gitx rollback <id>             # git reset --hard HEAD && git clean -fd（先解锁再重锁）
-gitx rollback <id> --base      # 回到 session 起点
-gitx finish <id>               # git worktree remove；分支 agent/<id> 保留
+gitx checkpoint <id> -m "msg"  # git add -A && git commit (refuses violations)
+gitx rollback <id>             # git reset --hard HEAD && git clean -fd
+gitx rollback <id> --base      # back to the session's starting commit
+gitx finish <id>               # git worktree remove; branch agent/<id> kept
 
 git diff main...agent/<id> && git merge agent/<id>
 ```
 
-## 查看锁状态：`gitx ls`
+## Inspecting locks: `gitx ls`
 
-用户侧视图（host 上运行），HIDDEN 文件也列出——你能看到 Agent 看不到什么：
+A user-side view (runs on the host); HIDDEN files are listed too — you
+see exactly what the agent can't:
 
 ```
-$ gitx ls                        # 或 gitx ls -v / -R src / --session t1
+$ gitx ls                        # or gitx ls -v / -R src / --session t1
 hidden .env        <- rule #2: hidden .env
 hidden .git/       <- built-in (always hidden)
 ro     generated/  <- rule #1: ro generated/**
 rw     src/        <- default
 ```
 
-`gitx policy [--path P]` 显示规则本身并解析单个路径。
+`gitx policy [--path P]` shows the rules themselves and resolves a single
+path.
 
-## 权限语义（pattern 规则）
+## Policy semantics (pattern rules)
 
-规则写在 `.gitx.toml`（建议提交），gitignore 风格、**last matching rule
-wins**；`gitx unlock X` = 追加一条 `mode="rw"` 覆盖规则。
+Rules live in `.gitx.toml` (commit it — it's your project's permission
+policy). gitignore-style, **last matching rule wins**; `gitx unlock X`
+appends an overriding `mode="rw"` rule.
 
-- 不含 `/` 的模式匹配任意深度（`.env` 也匹配 `sub/.env`）；前导 `/` 锚定仓库根。
-- `*` 不跨目录、`?` 单字符、`**` 跨目录段；一条规则匹配路径及其全部子孙。
-- `.git`、`.gitx` 内置 HIDDEN 不可覆盖。
+- A pattern without `/` matches at any depth (`.env` also matches
+  `sub/.env`); a leading `/` anchors at the repo root.
+- `*` matches within one segment, `?` one character, `**` spans
+  segments; a rule matches the path and everything below it.
+- `.git` and `.gitx` are built-in HIDDEN and cannot be overridden.
 
-**sparse 模式的一个已知限制**：把某目录 hide 后再 unlock 它的子树不生效
-（gitignore 的目录裁剪语义）；请按目录粒度操作：`hide secrets` →
-`unlock secrets` → `hide secrets/private`。
+**A known sparse-checkout limitation**: hiding a directory and then
+unlocking its subtree doesn't take effect (gitignore's directory-pruning
+semantics). Work at directory granularity: `hide secrets` →
+`unlock secrets` → `hide secrets/private`.
 
-## 威胁模型（诚实声明）
+## Threat model (honest statement)
 
-没有进程/文件系统边界，锁保护的是 **workspace 内的正常文件操作**——
-这是"结构化约束"，不是"硬隔离"：
+There is no process/filesystem boundary; locks constrain **normal file
+operations inside the workspace** — "structured constraints", not "hard
+containment":
 
-- **保证**：HIDDEN 文件不落盘（普通工具读不到）；RO 写入失败（嵌套目录
-  连 unlink/rename 都失败）；锁定文件的改动进不了任何 commit
-  （`gitx checkpoint` 和 hook 双重拦截）；一切违规在 `gitx status` 可见；
-  rollback 总能恢复。
-- **unix 泄露面（同 uid 下无法避免）**：agent 可以 `chmod u+w` 改 RO
-  文件、可以 unlink/rename **顶层** RO 文件（父目录必须保持可写）——但
-  这些都 git 可见、被守卫拦截、可 rollback；嵌套 RO 目录完全保护。
-  每次会话/运行开始时 gitx 会修复被篡改的权限。
-- **不保证**：agent 刻意走出 worktree（`cat ../.env` 读主 checkout、读
-  你 home 的任何东西）或翻 git 历史（`git show HEAD:.env`）——这与今天
-  直接在终端跑 agent 的风险等级相同。秘密本就不该进 git 仓库；需要硬
-  边界时是 sandbox 问题，不是 git 问题（v0.2 的 FUSE+bwrap 方案验证后
-  已被本版本取代）。
-- HIDDEN 文件的名字在 `git ls-files` 中仍可见（内容需要刻意 `git show`）；
-  agent 在 hidden 路径**新建**的文件是它自己的文件（不是你的秘密），git
-  会忽略该路径。
+- **Guaranteed**: HIDDEN files are never materialized (ordinary tools
+  can't read them); RO writes fail (nested dirs block even
+  unlink/rename); changes to locked paths enter no commit (double
+  guard: `gitx checkpoint` + pre-commit hook); every violation is
+  visible in `gitx status`; rollback always restores.
+- **Unix leak surface (unavoidable under the same uid)**: an agent can
+  `chmod u+w` a RO file, and can unlink/rename a **top-level** RO file
+  (the parent dir must stay writable) — but all of that is
+  git-visible, guard-intercepted, and rollback-able; nested RO dirs are
+  fully protected. Every session run re-applies (repairs) permissions.
+- **Not guaranteed**: an agent deliberately walking outside the worktree
+  (`cat ../.env` to read the main checkout, or anything in your home) or
+  digging through git history (`git show HEAD:.env`) — that's the same
+  risk class as running any agent unsandboxed in your terminal today.
+  Secrets shouldn't live in a git repo in the first place; hard
+  containment is a sandbox problem, not a git problem (the v0.2
+  FUSE+bwrap design was validated and then superseded by this version).
+- HIDDEN file *names* remain visible in `git ls-files` (reading their
+  content requires a deliberate `git show`); files an agent *creates*
+  under hidden paths are its own files (not your secrets), and git
+  ignores those paths.
 
-## 代码结构（刻意很小）
+## Code structure (deliberately small)
 
 ```
 gitx/
-├── cli.py      # 命令分发 + run/guard/status/checkpoint/rollback 编排
-├── policy.py   # RW/RO/HIDDEN + gitignore 风格 pattern（纯逻辑，可单测）
-├── config.py   # .gitx.toml 读写（3.11+ 用 tomllib，否则内置极简解析）
-├── gitcmd.py   # git CLI 包装
-├── locks.py    # 锁的三种 git 机制落地：sparse / chmod / hook
-└── session.py  # git worktree + 会话元数据 + flock
+├── cli.py      # command dispatch + run/guard/status/checkpoint/rollback
+├── policy.py   # RW/RO/HIDDEN + gitignore-style patterns (pure logic, unit-tested)
+├── config.py   # .gitx.toml read/write (tomllib on 3.11+, minimal fallback parser)
+├── gitcmd.py   # thin git CLI wrapper
+├── locks.py    # the three git-native lock mechanisms: sparse / chmod / hook
+└── session.py  # git worktree + session metadata + flock
 ```
 
-## 测试
+## Tests
 
 ```bash
-python3 -m unittest tests.test_policy   # 策略匹配单元测试
-bash tests/e2e.sh                       # 57 项矩阵：RW/RO/HIDDEN 不变量、
-                                        #   unix 泄露面的可见性+守卫+恢复、
-                                        #   git 生命周期、主 checkout 隔离
-bash examples/demo-agent.sh             # 端到端演示：修 bug→被锁→适应→合并
-bash examples/run-pi.sh <repo> -- -p "…"  # 真实 pi（需要 pi + auth）
+python3 -m unittest tests.test_policy   # policy matching unit tests
+bash tests/e2e.sh                       # 57-case matrix: RW/RO/HIDDEN invariants,
+                                        #   leak-surface visibility + guard + recovery,
+                                        #   git lifecycle, main-checkout isolation
+bash examples/demo-agent.sh             # end-to-end demo: fix bug → blocked by lock → adapt → merge
+bash examples/run-pi.sh <repo> -- -p "…"  # real pi (needs pi + auth)
 ```
 
-## 已知限制 / 下一步
+## Known limitations / next steps
 
-设计手册（含被验证过的 v0.2 FUSE 方案、实验目的与失败模式思考）：
-[`docs/design-guide.md`](docs/design-guide.md)（§15/§16 是实验待验证的问题）。
-值得收的数据：哪些锁真的有用？Agent 对 `Permission denied` 的反应？
-HIDDEN 是否影响完成率？锁的粒度（目录 vs 文件）是否需要更细？
+The full design document — including the superseded v0.2 FUSE approach,
+the experiment's goals, and failure-mode thinking — lives in
+[`docs/design-guide.md`](docs/design-guide.md) (§15/§16 list the questions
+the experiment still needs data on). Worth collecting: which locks are
+actually useful? How do agents react to `Permission denied`? Does HIDDEN
+hurt task completion? Is directory- vs file-level locking the right
+granularity?
 
 ## License
 
