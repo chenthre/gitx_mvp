@@ -205,6 +205,39 @@ actually useful? How do agents react to `Permission denied`? Does HIDDEN
 hurt task completion? Is directory- vs file-level locking the right
 granularity?
 
+## From the author
+
+The author does **not** recommend this repository or its tool as a
+practical, day-to-day solution. It exists first and foremost as a
+**mental experiment** built around one question:
+
+> *Git exists to help humans manage files. How should it evolve in the
+> era of human–agent collaboration?*
+
+One problem it probes: an agent will, without thinking, ingest
+**everything** it encounters — and some of that is harmful to its
+context. As humans, we often know which files are irrelevant to a task
+(and needn't be read) and which files should not be changed. We want to
+draw those boundaries *before* handing a workspace to an agent.
+
+This looks a great deal like what `git worktree` already does — so the
+question became: *can git, natively, take on this responsibility?*
+
+Its value, if any, is as a reference for those building the next
+generation of agent-friendly, git-like tools: until this experiment was
+attempted, no public implementation of this idea existed (to the
+author's knowledge). If such tools ever grow from this seed, the author
+would be very glad to know.
+
+Seeing the attempt through also turned up its limits — to fully meet the
+requirement, a mainstream bubblewrap-style sandbox seems the more
+practical, and easier, path.
+
+> *愿思想碰撞出的火花可以照亮一点点前行的迷雾。*
+>
+> *May the sparks struck by colliding thoughts light, if but a little,
+> the mist that lies ahead.*
+
 ## License
 
 [MIT](LICENSE)
