@@ -1,5 +1,9 @@
 # gitx — 给 Agent 的受控 Git 工作视图（MVP）
 
+> [!WARNING]
+> **AI 生成项目**。本仓库由 AI 编程助手生成，可能存在设计缺陷或问题；
+> 使用前请自行审查，生产环境请谨慎。欢迎提 issue 和贡献。
+
 > **English**: [README.md](README.md)
 
 > **一句话**：在 git worktree 上用 **git 自己的机制**实现 `RW / RO / HIDDEN`

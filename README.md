@@ -1,5 +1,11 @@
 # gitx — controlled RW/RO/HIDDEN Git worktree views for coding agents
 
+> [!WARNING]
+> **AI-generated project.** This repository was produced with AI coding
+> assistance and may contain design flaws or bugs. Review the code before
+> relying on it; use in production at your own risk. Issues and
+> contributions are welcome.
+
 > **In one sentence**: use **git's own mechanisms** to give agents a
 > workspace with `RW / RO / HIDDEN` file locks. Everything the agent
 > legitimately changes is under git version control in real time —
